@@ -53,6 +53,41 @@ class ECMPoint(object):
 
 # elliptic curve like y^2 = x^3 + a*x + b
 class EllipticCurveModulo(object):
+    class FullPointIter(object):
+        def __init__(self, ec: 'EllipticCurveModulo'):
+            self.x = 0  # type: int
+            self.ec = ec
+            self.make_inverse = False
+            self.point_cache = None  # type: ECMPoint
+            self.squares_y = dict([(y**2 % ec._mod, y) for y in range(int(ec._mod/2 + 1))])
+
+        def next(self) -> ECMPoint:
+            while self.x < self.ec._mod:
+                not_ok = True
+                if self.make_inverse:
+                    self.x += 1
+                    if self.point_cache.y != 0:
+                        not_ok = False
+                        self.point_cache.y = -self.point_cache.y % self.ec._mod
+                else:
+                    while not_ok:
+                        y = self.squares_y.get(self.ec.eval_x(self.x))
+                        if y is None:
+                            self.x += 1
+                        else:
+                            not_ok = False
+                            self.point_cache = self.ec.point(self.x, y)
+                self.make_inverse = not self.make_inverse
+                if not not_ok:
+                    return self.ec.point(self.point_cache.x, self.point_cache.y)
+            raise StopIteration()
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return self.next()
+
     class PointIter(object):
         def __init__(self, gen_point: ECMPoint, ec: 'EllipticCurveModulo'):
             self.gen_point = gen_point
@@ -60,7 +95,7 @@ class EllipticCurveModulo(object):
             self.ec = ec
             self.max_gen = 1
 
-        def next(self):
+        def next(self) -> ECMPoint:
             if self.inter_point != ECMPoint.O:
                 if self.inter_point is not None:
                     self.inter_point = self.gen_point + self.inter_point
@@ -83,13 +118,16 @@ class EllipticCurveModulo(object):
         self._b = b
         self.__size__ = None  # type: int
 
-    def point_begin(self) -> 'PointIter':
-        for x in range(1, self._mod):
+    def old_point_begin(self) -> 'PointIter':
+        for x in range(0, self._mod):
             try:
                 p = self.eval(x)
                 return EllipticCurveModulo.PointIter(p, self)
             except ValueError:
                 pass
+
+    def point_begin(self) -> 'FullPointIter':
+        return EllipticCurveModulo.FullPointIter(self)
 
     def eval_x(self, x: int) -> int:
         x = x % self._mod
@@ -101,7 +139,7 @@ class EllipticCurveModulo(object):
         for y in range(self._mod):
             if y**2 % self._mod == y_square:
                 return self.point(x, y)
-        raise ValueError("given x cannot evaluate a point")
+        raise ValueError("given x cannot evaluate a point (no square root from {} modulo {})".format(y_square, self._mod))
 
     def check(self, crypto_check: bool = True, raise_error=True) -> bool:
         if self._mod <= 2:
